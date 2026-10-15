@@ -2,24 +2,22 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HD Camera & Gallery App</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <title>HD Camera & Zoom Gallery</title>
     <style>
+        * { box-sizing: border-box; }
         body {
             margin: 0;
             background: #000;
             color: #fff;
-            font-family: sans-serif;
+            font-family: system-ui, -apple-system, sans-serif;
+            height: 100vh;
             display: flex;
             flex-direction: column;
-            align-items: center;
-            justify-content: space-between;
-            height: 100vh;
             overflow: hidden;
         }
         .viewfinder {
             position: relative;
-            width: 100%;
             flex: 1;
             display: flex;
             align-items: center;
@@ -27,60 +25,109 @@
             background: #111;
             overflow: hidden;
         }
-        video, canvas {
+        video {
             width: 100%;
             height: 100%;
             object-fit: cover;
-            /* GPU acceleration ke liye */
-            transform: translateZ(0); 
         }
-        canvas {
-            display: none;
-        }
+        canvas { display: none; }
+        
         .controls {
             display: flex;
             justify-content: space-around;
             align-items: center;
-            width: 100%;
-            height: 120px;
-            background: rgba(0, 0, 0, 0.8);
-            position: absolute;
-            bottom: 0;
+            height: 110px;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 0 20px;
         }
         .capture-btn {
-            width: 75px;
-            height: 75px;
+            width: 70px;
+            height: 70px;
             background: #fff;
-            border: 4px solid #ccc;
+            border: 4px solid #888;
             border-radius: 50%;
             cursor: pointer;
-            transition: transform 0.1s;
+            outline: none;
         }
-        .capture-btn:active {
-            transform: scale(0.9);
-        }
+        .capture-btn:active { transform: scale(0.92); }
         .gallery-btn {
             width: 50px;
             height: 50px;
-            background: #333;
+            background: #222;
             border: 2px solid #fff;
             border-radius: 10px;
             background-size: cover;
             background-position: center;
             cursor: pointer;
         }
-        .processing-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.7);
+
+        /* Gallery Modal */
+        .modal {
             display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #000;
+            z-index: 1000;
+            flex-direction: column;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            background: #111;
+        }
+        .close-btn {
+            background: #ff4757;
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 5px;
+            padding: 10px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .gallery-grid img {
+            width: 100%;
+            height: 110px;
+            object-fit: cover;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        /* Fullscreen Zoom View */
+        .zoom-view {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.95);
+            z-index: 2000;
             align-items: center;
             justify-content: center;
-            font-size: 18px;
-            color: #fffa65;
+            overflow: auto;
+        }
+        .zoom-view img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            transition: transform 0.2s ease;
+        }
+        .close-zoom {
+            position: absolute;
+            top: 20px; right: 20px;
+            background: #fff; color: #000;
+            border: none; border-radius: 50%;
+            width: 40px; height: 40px;
+            font-weight: bold; font-size: 18px;
+            z-index: 2100;
         }
     </style>
 </head>
@@ -89,13 +136,27 @@
     <div class="viewfinder">
         <video id="video" autoplay playsinline></video>
         <canvas id="canvas"></canvas>
-        <div id="processing" class="processing-overlay">AI Processing & Sharpening...</div>
     </div>
 
     <div class="controls">
-        <div style="width: 50px;"></div> <!-- Spacer -->
+        <div style="width:50px;"></div>
         <button class="capture-btn" id="capture"></button>
-        <div class="gallery-btn" id="galleryBtn" title="Gallery"></div>
+        <div class="gallery-btn" id="galleryBtn"></div>
+    </div>
+
+    <!-- Modal Gallery -->
+    <div class="modal" id="galleryModal">
+        <div class="modal-header">
+            <h3>Aapki Photos</h3>
+            <button class="close-btn" id="closeModal">Close</button>
+        </div>
+        <div class="gallery-grid" id="galleryGrid"></div>
+    </div>
+
+    <!-- Zoom Viewer -->
+    <div class="zoom-view" id="zoomView">
+        <button class="close-zoom" id="closeZoom">✕</button>
+        <img id="fullImage" src="" alt="Zoomed Photo">
     </div>
 
     <script>
@@ -103,74 +164,73 @@
         const canvas = document.getElementById('canvas');
         const captureBtn = document.getElementById('capture');
         const galleryBtn = document.getElementById('galleryBtn');
-        const processingOverlay = document.getElementById('processing');
+        const galleryModal = document.getElementById('galleryModal');
+        const closeModal = document.getElementById('closeModal');
+        const galleryGrid = document.getElementById('galleryGrid');
+        const zoomView = document.getElementById('zoomView');
+        const fullImage = document.getElementById('fullImage');
+        const closeZoom = document.getElementById('closeZoom');
 
-        let galleryImages = [];
+        let photos = [];
 
-        // Camera start karein (Back camera preference ke sath)
-        async function initCamera() {
+        // Camera Initialization
+        async function startCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+                    video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
                     audio: false
                 });
                 video.srcObject = stream;
-            } catch (err) {
-                alert("Camera access error: " + err);
+            } catch (e) {
+                alert("Camera error: Chrome site settings me jaakar Camera Permission ALLOW karein!");
             }
         }
-        initCamera();
+        startCamera();
 
-        // Photo khichne aur processing (Sharpening / GPU Filter) karne ka function
+        // Capture & Process
         captureBtn.addEventListener('click', () => {
-            processingOverlay.style.display = 'flex';
+            canvas.width = video.videoWidth || 1280;
+            canvas.height = video.videoHeight || 720;
+            const ctx = canvas.getContext('2d');
+            
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-            setTimeout(() => {
-                canvas.width = video.videoWidth || 1280;
-                canvas.height = video.videoHeight || 720;
-                const ctx = canvas.getContext('2d');
-
-                // Video frame ko canvas par draw karein
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-                // Image processing: Contrast aur Sharpening effect apply karna taaki photo saaf dikhe
-                let imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                let data = imgData.data;
-                
-                // Simple high-contrast / clarity enhancement algorithm
-                for (let i = 0; i < data.length; i += 4) {
-                    // Contrast boost
-                    data[i] = data[i] < 128 ? data[i] * 0.95 : data[i] * 1.05;     // Red
-                    data[i+1] = data[i+1] < 128 ? data[i+1] * 0.95 : data[i+1] * 1.05; // Green
-                    data[i+2] = data[i+2] < 128 ? data[i+2] * 0.95 : data[i+2] * 1.05; // Blue
-                }
-                ctx.putImageData(imgData, 0, 0);
-
-                // Image ko URL mein badal kar gallery array mein save karein
-                const imageUrl = canvas.toDataURL('image/jpeg', 0.95);
-                galleryImages.push(imageUrl);
-
-                // Gallery button ka thumbnail update karein
-                galleryBtn.style.backgroundImage = `url(${imageUrl})`;
-
-                processingOverlay.style.display = 'none';
-            }, 400); // 400ms ka artificial processing delay realistic feel ke liye
-        });
-
-        // Gallery kholne ka feature
-        galleryBtn.addEventListener('click', () => {
-            if (galleryImages.length === 0) {
-                alert("Gallery khali hai! Pehle ek photo khichein.");
-                return;
+            // Sharpening / Contrast Enhancement
+            let imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            let d = imgData.data;
+            for (let i = 0; i < d.length; i += 4) {
+                d[i] = d[i] < 128 ? d[i] * 0.92 : d[i] * 1.08;
+                d[i+1] = d[i+1] < 128 ? d[i+1] * 0.92 : d[i+1] * 1.08;
+                d[i+2] = d[i+2] < 128 ? d[i+2] * 0.92 : d[i+2] * 1.08;
             }
-            // Ek naye tab ya window mein gallery ki latest photo dikhana
-            let win = window.open("");
-            win.document.write("<h2>Aapki Gallery</h2><div style='display:flex;flex-wrap:wrap;gap:10px;'>");
-            galleryImages.forEach(img => {
-                win.document.write(`<img src="${img}" style="width:200px;border-radius:8px;border:2px solid #fff;" />`);
-            });
-            win.document.write("</div>");
+            ctx.putImageData(imgData, 0, 0);
+
+            const url = canvas.toDataURL('image/jpeg', 0.95);
+            photos.unshift(url);
+            galleryBtn.style.backgroundImage = `url(${url})`;
         });
+
+        // Open Gallery Modal
+        galleryBtn.addEventListener('click', () => {
+            if(photos.length === 0) return alert("Pehle photo khichein!");
+            galleryGrid.innerHTML = '';
+            photos.forEach(src => {
+                const img = document.createElement('img');
+                img.src = src;
+                img.onclick = () => openZoom(src);
+                galleryGrid.appendChild(img);
+            });
+            galleryModal.style.display = 'flex';
+        });
+
+        closeModal.addEventListener('click', () => galleryModal.style.display = 'none');
+
+        // Zoom View
+        function openZoom(src) {
+            fullImage.src = src;
+            zoomView.style.display = 'flex';
+        }
+        closeZoom.addEventListener('click', () => zoomView.style.display = 'none');
     </script>
 </body>
 </html>
